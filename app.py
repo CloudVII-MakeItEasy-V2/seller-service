@@ -1,36 +1,101 @@
 from flask import Flask, request, jsonify
+from flasgger import Swagger  # For OpenAPI documentation
+from db_setup import db
 from seller import Seller
 from product import Product
 
 app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://yj2747:dbuserdbuser@makeiteasy.ck0scewemjwp.us-east-1.rds.amazonaws.com:3306/Seller_Service'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db.init_app(app)
+Swagger(app)  # Initialize Swagger
 
-sellers = {}
-products = {}
-seller_id_counter = 1
-product_id_counter = 1
-
-# Add a root route to avoid the 404 error
 @app.route('/')
 def index():
     return 'Welcome to the Seller Service API!'
 
-# Register a new seller
+@app.route('/test-db-connection', methods=['GET'])
+def test_db_connection():
+    """Test the database connection
+    ---
+    responses:
+      200:
+        description: Database connected successfully
+      500:
+        description: Database connection error
+    """
+    try:
+        sellers = Seller.query.all()
+        return jsonify({"message": "Database connection successful", "sellers": len(sellers)}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/seller/register', methods=['POST'])
 def register_seller():
-    global seller_id_counter
+    """Register a new seller
+    ---
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            name:
+              type: string
+            email:
+              type: string
+    responses:
+      201:
+        description: Seller created successfully
+      400:
+        description: Invalid input
+    """
     data = request.json
     name = data.get('name')
     email = data.get('email')
 
-    new_seller = Seller(seller_id_counter, name, email)
-    sellers[seller_id_counter] = new_seller
-    seller_id_counter += 1
+    new_seller = Seller(name=name, email=email)
+    db.session.add(new_seller)
+    db.session.commit()
 
-    return jsonify(new_seller.register_seller(name, email)), 201
+    return jsonify({
+        "seller": new_seller.register_seller(),
+        "links": [
+            {"rel": "self", "href": f"/seller/{new_seller.id}"},
+            {"rel": "products", "href": f"/seller/{new_seller.id}/products"}
+        ]
+    }), 201
 
 @app.route('/product', methods=['POST'])
 def create_product():
-    global product_id_counter
+    """Create a new product
+    ---
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            seller_id:
+              type: integer
+            name:
+              type: string
+            price:
+              type: float
+            stock:
+              type: integer
+            description:
+              type: string
+            category:
+              type: string
+    responses:
+      201:
+        description: Product created successfully
+      404:
+        description: Seller not found
+    """
     data = request.json
     seller_id = data.get('seller_id')
     name = data.get('name')
@@ -39,57 +104,25 @@ def create_product():
     description = data.get('description')
     category = data.get('category')
 
-    if seller_id not in sellers:
+    seller = Seller.query.get(seller_id)
+    if not seller:
         return jsonify({"error": "Seller not found"}), 404
 
-    new_product = Product(product_id_counter, sellers[seller_id], name, price, stock, description, category)
-    products[product_id_counter] = new_product
-    sellers[seller_id].add_product(new_product)
-    product_id_counter += 1
+    new_product = Product(seller_id=seller.id, name=name, price=price, stock=stock, description=description, category=category)
+    db.session.add(new_product)
+    db.session.commit()
 
-    return jsonify({"message": "Product created successfully.", "product_id": new_product.product_id}), 201
+    return jsonify({
+        "message": "Product created successfully.",
+        "product_id": new_product.id,
+        "links": [
+            {"rel": "self", "href": f"/product/{new_product.id}"},
+            {"rel": "seller", "href": f"/seller/{seller_id}"}
+        ]
+    }), 201
 
-# Route to get product details
-@app.route('/product/<int:product_id>', methods=['GET'])
-def get_product_details(product_id):
-    product = products.get(product_id)
-
-    if not product:
-        return jsonify({"error": "Product not found"}), 404
-
-    return jsonify(product.get_details()), 200
-
-# Route to update stock
-@app.route('/product/<int:product_id>/stock', methods=['PUT'])
-def update_stock(product_id):
-    product = products.get(product_id)
-
-    if not product:
-        return jsonify({"error": "Product not found"}), 404
-
-    data = request.json
-    quantity = data.get('quantity', 0)
-
-    try:
-        product.update_stock(quantity)
-        return jsonify({"message": "Stock updated successfully."}), 200
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-
-# Route to check product availability
-@app.route('/product/<int:product_id>/availability', methods=['GET'])
-def check_availability(product_id):
-    product = products.get(product_id)
-
-    if not product:
-        return jsonify({"error": "Product not found"}), 404
-
-    required_quantity = int(request.args.get('quantity', 1))
-
-    if product.check_availability(required_quantity):
-        return jsonify({"available": True, "message": "Product is available."}), 200
-    else:
-        return jsonify({"available": False, "message": "Not enough stock."}), 200
-
+# Main entry point
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
     app.run(host='0.0.0.0', port=8000, debug=True)

@@ -1,27 +1,23 @@
-class Product:
-    def __init__(self, product_id, seller, name, price, stock, description, category):
-        self.product_id = product_id
-        self.seller = seller
-        self.name = name
-        self.price = price
-        self.stock = stock
-        self.description = description
-        self.category = category
+# product.py
+from db_setup import db
+
+class Product(db.Model):
+    __tablename__ = 'Product'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('Seller.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    price = db.Column(db.Float, nullable=False)
+    stock = db.Column(db.Integer, nullable=False)
+    description = db.Column(db.String(200))
+    category = db.Column(db.String(100))
 
     def update_stock(self, quantity):
-        if self.stock + quantity < 0:
-            raise ValueError("Stock cannot be negative.")
         self.stock += quantity
-
-    def reduce_stock(self, quantity):
-        if self.stock >= quantity:
-            self.stock -= quantity
-        else:
-            raise ValueError("Not enough stock to fulfill the order.")
 
     def get_details(self):
         return {
-            'product_id': self.product_id,
+            'product_id': self.id,
             'name': self.name,
             'price': self.price,
             'stock': self.stock,
