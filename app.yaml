@@ -1,0 +1,8 @@
+runtime: python39
+entrypoint: gunicorn -b :$PORT app:app
+
+env_variables:
+  MYSQL_HOST: "makeiteasy.ck0scewemjwp.us-east-1.rds.amazonaws.com"
+  MYSQL_USER: "yj2747"
+  MYSQL_PASSWORD: "dbuserdbuser"
+  MYSQL_DB: "Seller_Service"
