@@ -3,17 +3,19 @@ from flask import Flask, request, jsonify, url_for
 from flasgger import Swagger
 from dotenv import load_dotenv
 from db_setup import db
-from seller import Seller
-from product import Product
+from models import Seller, Product
 
+# Load environment variables
 load_dotenv()
 
+# Initialize Flask app
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = (
     f"mysql+pymysql://{os.getenv('MYSQL_USER')}:{os.getenv('MYSQL_PASSWORD')}@{os.getenv('MYSQL_HOST')}:3306/{os.getenv('MYSQL_DB')}"
 )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Initialize database
 db.init_app(app)
 Swagger(app)
 
@@ -42,8 +44,13 @@ def test_db_connection():
     try:
         sellers = Seller.query.all()
         return jsonify({"message": "Database connection successful", "sellers_count": len(sellers)}), 200
+        #return 'Welcome to the Seller Service API!'
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        return jsonify({
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
 
 @app.route('/seller/register', methods=['POST'])
 def register_seller():
@@ -72,16 +79,16 @@ def register_seller():
     data = request.json
     name = data.get('name')
     email = data.get('email')
-    password_hash = data.get('password_hash', 'default_hash_value')  # Ensure non-null
+    password_hash = data.get('password_hash', 'default_hash_value')
 
     if not name or not email:
         return jsonify({"error": "Name and email are required"}), 400
 
-    # Check if seller already exists
-    existing_seller = Seller.query.filter_by(email=email).first()
-    if existing_seller:
+    # Check for duplicate seller
+    if Seller.query.filter_by(email=email).first():
         return jsonify({"error": "Seller with this email already exists"}), 400
 
+    # Create new seller
     new_seller = Seller(name=name, email=email, password_hash=password_hash)
     db.session.add(new_seller)
     db.session.commit()
@@ -143,12 +150,6 @@ def get_seller_products(seller_id):
         return jsonify({"error": "Seller not found"}), 404
 
     products = [p.get_details() for p in seller.products]
-    for p in products:
-        p["_links"] = {
-            "self": url_for('get_product', product_id=p['product_id'], _external=True),
-            "seller": url_for('get_seller', seller_id=seller_id, _external=True)
-        }
-
     response = {
         "seller_id": seller_id,
         "products": products,
@@ -157,7 +158,6 @@ def get_seller_products(seller_id):
             "seller": url_for('get_seller', seller_id=seller_id, _external=True)
         }
     }
-
     return jsonify(response), 200
 
 @app.route('/product', methods=['POST'])
@@ -219,7 +219,6 @@ def create_product():
             "seller": url_for('get_seller', seller_id=seller_id, _external=True)
         }
     }
-
     return jsonify(response), 201
 
 @app.route('/product/<int:product_id>', methods=['GET'])
