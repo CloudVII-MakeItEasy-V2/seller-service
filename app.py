@@ -3,7 +3,8 @@ from flask import Flask, request, jsonify, url_for
 from flasgger import Swagger
 from dotenv import load_dotenv
 from db_setup import db
-from models import Seller, Product
+from seller import Seller
+from product import Product
 
 # Load environment variables
 load_dotenv()
@@ -247,6 +248,69 @@ def get_product(product_id):
         "seller": url_for('get_seller', seller_id=product.seller_id, _external=True)
     }
     return jsonify(product_details), 200
+
+@app.route('/seller/<int:seller_id>/balance', methods=['GET'])
+def get_seller_balance(seller_id):
+    """
+    Get seller's current balance
+    ---
+    parameters:
+      - name: seller_id
+        in: path
+        required: true
+        type: integer
+    responses:
+      200:
+        description: Seller's current balance
+      404:
+        description: Seller not found
+    """
+    seller = Seller.query.get(seller_id)
+    if not seller:
+        return jsonify({"error": "Seller not found"}), 404
+
+    return jsonify({"seller_id": seller.seller_id, "balance": seller.balance}), 200
+
+@app.route('/seller/<int:seller_id>/balance', methods=['POST'])
+def update_seller_balance(seller_id):
+    """
+    Update seller's balance
+    ---
+    parameters:
+      - name: seller_id
+        in: path
+        required: true
+        type: integer
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            amount:
+              type: integer
+    responses:
+      200:
+        description: Balance updated successfully
+      404:
+        description: Seller not found
+      400:
+        description: Invalid input
+    """
+    data = request.json
+    amount = data.get('amount')
+
+    if amount is None:
+        return jsonify({"error": "Amount is required"}), 400
+
+    seller = Seller.query.get(seller_id)
+    if not seller:
+        return jsonify({"error": "Seller not found"}), 404
+
+    seller.update_balance(amount)
+    db.session.commit()
+
+    return jsonify({"seller_id": seller.seller_id, "new_balance": seller.balance}), 200
 
 if __name__ == '__main__':
     with app.app_context():
