@@ -34,6 +34,11 @@ seller_service_url = os.getenv('SELLER_SERVICE_URL', 'http://default-seller-serv
 TRACKINGMORE_API_KEY = os.getenv('TRACKINGMORE_API_KEY', 'ti6225pj-2o0k-11tw-l588-w41y04dx9s4l')
 SHIPENGINE_API_KEY = os.getenv('SHIPENGINE_API_KEY', 'TEST_X/LLMqUP+3WsYMj37bImpuWcJJzP0koHzPwbbrmodz4')
 
+# Initialize JWT Manager
+app.config['JWT_SECRET_KEY'] = 'dbuserdbuser'  
+jwt = JWTManager(app)
+
+
 # Helper function for retrying requests
 def make_service_request(url, headers):
     session = requests.Session()
@@ -83,6 +88,35 @@ def grants_required(grant):
             return func(*args, **kwargs)
         return wrapper
     return decorator
+
+@app.route('/seller/login', methods=['POST'])
+def login_seller():
+    """
+    Login a seller
+    ---
+    parameters:
+      - name: body
+        in: body
+        required: true
+        schema:
+          type: object
+          properties:
+            email:
+              type: string
+            password:
+              type: string
+    responses:
+      200:
+        description: Login successful, returns JWT token
+      400:
+        description: Invalid email or password
+    """
+    data = request.json
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
 
 @app.route('/customer/<int:customer_id>/orders/<int:order_id>/tracking', methods=['GET'])
 @grants_required('view_order')
