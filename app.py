@@ -1,10 +1,15 @@
 import os
-from flask import Flask, request, jsonify, url_for
+import json
+from flask import Flask, request, jsonify, url_for, g
 from flasgger import Swagger
 from dotenv import load_dotenv
 from db_setup import db
 from seller import Seller
 from product import Product
+from functools import wraps
+import requests
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 
 # Load environment variables
 load_dotenv()
@@ -19,6 +24,23 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Initialize database
 db.init_app(app)
 Swagger(app)
+
+# Service URLs
+order_service_url = os.getenv('ORDER_SERVICE_URL', 'http://default-order-service-url')
+seller_service_url = os.getenv('SELLER_SERVICE_URL', 'http://default-seller-service-url')
+
+# API Keys
+
+TRACKINGMORE_API_KEY = os.getenv('TRACKINGMORE_API_KEY', 'ti6225pj-2o0k-11tw-l588-w41y04dx9s4l')
+SHIPENGINE_API_KEY = os.getenv('SHIPENGINE_API_KEY', 'TEST_X/LLMqUP+3WsYMj37bImpuWcJJzP0koHzPwbbrmodz4')
+
+# Helper function for retrying requests
+def make_service_request(url, headers):
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    session.mount('https://', HTTPAdapter(max_retries=retries))
+    response = session.get(url, headers=headers)
+    return response
 
 @app.route('/')
 def index():
@@ -45,13 +67,125 @@ def test_db_connection():
     try:
         sellers = Seller.query.all()
         return jsonify({"message": "Database connection successful", "sellers_count": len(sellers)}), 200
-        #return 'Welcome to the Seller Service API!'
     except Exception as e:
         import traceback
         return jsonify({
             "error": str(e),
             "traceback": traceback.format_exc()
         }), 500
+
+ # Grants decorator
+def grants_required(grant):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Add logic for verifying grants
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+@app.route('/customer/<int:customer_id>/orders/<int:order_id>/tracking', methods=['GET'])
+@grants_required('view_order')
+def get_order_tracking(customer_id, order_id):
+    """
+    Track an order's shipping status
+    ---
+    parameters:
+      - name: customer_id
+        in: path
+        required: true
+        type: integer
+      - name: order_id
+        in: path
+        required: true
+        type: integer
+    responses:
+      200:
+        description: Tracking information
+      404:
+        description: Order or tracking information not found
+      500:
+        description: Internal server error
+    """
+    # Retrieve order details from Order Service
+    headers = {
+        'X-Correlation-ID': g.get('correlation_id', 'default-correlation-id'),
+        'Authorization': request.headers.get('Authorization', '')
+    }
+    order_resp = make_service_request(f'{order_service_url}/orders/{order_id}', headers=headers)
+    if order_resp.status_code != 200:
+        return jsonify({"error": "Failed to retrieve order details"}), order_resp.status_code
+
+    order_info = order_resp.json()
+    tracking_number = order_info.get('tracking_number')
+    if not tracking_number:
+        return jsonify({"error": "No tracking number available for this order"}), 404
+
+    tm_headers = {
+        'Trackingmore-Api-Key': TRACKINGMORE_API_KEY,
+        'Content-Type': 'application/json'
+    }
+
+    # Attempt to create tracking in TrackingMore
+    create_payload = {
+        "tracking_number": tracking_number,
+        "carrier_code": "ups"
+    }
+    create_resp = requests.post(
+        'https://api.trackingmore.com/v2/trackings/create',
+        headers=tm_headers,
+        data=json.dumps(create_payload)
+    )
+
+    if create_resp.status_code not in [200, 201, 409]:
+        return jsonify({"error": "Failed to create tracking", "details": create_resp.text}), create_resp.status_code
+
+    # Retrieve tracking details
+    tm_response = make_service_request(
+        'https://api.trackingmore.com/v2/trackings/get',
+        headers=tm_headers
+    )
+    if tm_response.status_code == 200:
+        tm_data = tm_response.json()
+        if 'data' in tm_data and len(tm_data['data']) == 0:
+            tracking_link = f"https://www.trackingmore.com/track/en/{tracking_number}?express=ups"
+            return jsonify({"link": tracking_link}), 200
+        return jsonify(tm_data), 200
+    else:
+        return jsonify({"error": "Failed to retrieve tracking details", "details": tm_response.text}), tm_response.status_code
+
+@app.route('/seller_management/<int:seller_id>', methods=['GET'])
+@grants_required('view_order')
+def seller_management(seller_id):
+    """
+    Retrieve seller dashboard link
+    ---
+    parameters:
+      - name: seller_id
+        in: path
+        required: true
+        type: integer
+    responses:
+      200:
+        description: Seller management dashboard URL
+      404:
+        description: Seller not found
+      500:
+        description: Internal server error
+    """
+    headers = {
+        'X-Correlation-ID': g.get('correlation_id', 'default-correlation-id'),
+        'Authorization': request.headers.get('Authorization', '')
+    }
+    seller_resp = make_service_request(f'{seller_service_url}/seller/{seller_id}', headers=headers)
+    if seller_resp.status_code != 200:
+        return jsonify({"error": "Failed to retrieve seller details"}), seller_resp.status_code
+
+    seller_info = seller_resp.json()
+    seller_name = seller_info.get('name', 'Unknown')
+    dashboard_url = f"https://dashboard.shipengine.com/?user_id={seller_id}&name={seller_name}"
+
+    return jsonify({"seller_id": seller_id, "dashboard_url": dashboard_url}), 200
 
 @app.route('/seller/register', methods=['POST'])
 def register_seller():
@@ -110,7 +244,7 @@ def get_seller(seller_id):
     ---
     parameters:
       - name: seller_id
-        in: path
+        in: 
         required: true
         type: integer
     responses:
@@ -311,6 +445,7 @@ def update_seller_balance(seller_id):
     db.session.commit()
 
     return jsonify({"seller_id": seller.seller_id, "new_balance": seller.balance}), 200
+
 
 if __name__ == '__main__':
     with app.app_context():
